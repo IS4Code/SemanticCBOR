@@ -12,7 +12,7 @@ namespace IS4.Cbor
     /// A CBOR decoder used for reading primitive CBOR tokens from data.
     /// </summary>
     [StructLayout(LayoutKind.Auto)]
-    public ref struct CborDecoder
+    public ref partial struct CborDecoder
     {
         /// <summary>
         /// A special state indicating the end of an indefinite-length array or map.

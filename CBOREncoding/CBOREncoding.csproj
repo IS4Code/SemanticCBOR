@@ -9,7 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Half" Version="1.0.0" />
     <PackageReference Include="IndexRange" Version="1.0.3" />
+    <PackageReference Include="Microsoft.Bcl.HashCode" Version="1.1.1" />
     <PackageReference Include="System.Formats.Cbor" Version="8.0.0" />
   </ItemGroup>
 
