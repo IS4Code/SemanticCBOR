@@ -8,18 +8,46 @@ using System.Runtime.InteropServices;
 
 namespace IS4.Cbor
 {
+    /// <summary>
+    /// A CBOR decoder used for reading primitive CBOR tokens from data.
+    /// </summary>
     [StructLayout(LayoutKind.Auto)]
     public ref struct CborDecoder
     {
+        /// <summary>
+        /// A special state indicating the end of an indefinite-length array or map.
+        /// </summary>
         public const CborReaderState EndIndefiniteLengthCollection = (CborReaderState)254;
 
+        /// <summary>
+        /// The minimum size that a chunk before the end of the stream must have to be accepted.
+        /// </summary>
         public const int MinNonFinalChunkLength = CborDecoderCheckpoint.CacheMaxSize;
 
+        /// <summary>
+        /// The current state of the decoder.
+        /// </summary>
         CborDecoderCheckpoint s;
+
+        /// <summary>
+        /// The current chunk of data processed by the decoder.
+        /// </summary>
         readonly ReadOnlySpan<byte> currentChunk;
+
+        /// <summary>
+        /// Whether <see cref="currentChunk"/> is the final chunk in the stream.
+        /// </summary>
         readonly bool isFinal;
+
+        /// <summary>
+        /// The current position in <see cref="currentChunk"/>.
+        /// May be negative, in which case it points into <see cref="cache"/> from the end.
+        /// </summary>
         int offset;
 
+        /// <summary>
+        /// Accesses the previously cached data.
+        /// </summary>
         readonly unsafe Span<byte> cache {
             [UnscopedRef]
             get {
@@ -32,21 +60,36 @@ namespace IS4.Cbor
             }
         }
 
+        /// <summary>
+        /// Accesses the data in <see cref="currentChunk"/> beginning at <see cref="offset"/>.
+        /// </summary>
         readonly ReadOnlySpan<byte> chunkView {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => currentChunk[offset..];
         }
 
+        /// <summary>
+        /// Accesses the data in <see cref="cache"/> beginning at <see cref="offset"/>.
+        /// </summary>
         readonly ReadOnlySpan<byte> cacheView {
             [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => cache[^-offset..];
         }
 
+        /// <summary>
+        /// Obtains either <see cref="chunkView"/> or <see cref="cacheView"/> based on
+        /// the sign of <see cref="offset"/>.
+        /// </summary>
         readonly ReadOnlySpan<byte> dataView {
             [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => offset >= 0 ? chunkView : cacheView;
         }
 
+        /// <summary>
+        /// Accesses the byte of the current data starting at <see cref="offset"/>.
+        /// </summary>
+        /// <param name="index">The index of the byte.</param>
+        /// <returns>The value of the byte.</returns>
         readonly byte this[int index] {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
@@ -60,6 +103,15 @@ namespace IS4.Cbor
             }
         }
 
+        /// <summary>
+        /// When <see cref="State"/> is <see cref="CborReaderState.TextString"/>
+        /// or <see cref="CborReaderState.ByteString"/>, contains the value
+        /// of the string as bytes.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// <see cref="State"/> is not <see cref="CborReaderState.TextString"/>
+        /// or <see cref="CborReaderState.ByteString"/>.
+        /// </exception>
         public readonly ReadOnlySpan<byte> ValueBytes {
             [UnscopedRef]
             get {
@@ -75,32 +127,56 @@ namespace IS4.Cbor
                 return dataView.Slice(0, s.ValueSize);
             }
         }
-
+        
+        /// <summary>
+        /// The current state of the decoder.
+        /// </summary>
         public readonly CborReaderState State {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.State;
         }
 
+        /// <summary>
+        /// The initial byte header of the current value.
+        /// </summary>
         public readonly CborInitialByte InitialByte {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.InitialByte;
         }
 
+        /// <summary>
+        /// Retrieves the raw size of the value. If <see cref="ValueBytes"/>
+        /// is available, retrieves its length. In other states that have a value,
+        /// retrieves the size of <see cref="RawValue"/>.
+        /// </summary>
         public readonly int RawSize {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.ValueSize;
         }
 
+        /// <summary>
+        /// The atomic value corresponding to the current state.
+        /// For definite-length collections, this value stores the number
+        /// of the elements in the collection.
+        /// </summary>
         public readonly ulong RawValue {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.RawValue;
         }
 
+        /// <summary>
+        /// Whether the current value is marked as having indefinite length in the data.
+        /// </summary>
         public readonly bool IsIndefiniteLength {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.InitialByte.AdditionalInfo == CborAdditionalInfo.IndefiniteLength;
         }
 
+        /// <summary>
+        /// Constructs a new instance of the decoder from the first chunk of the data stream.
+        /// </summary>
+        /// <param name="initialChunk">The first chunk of the data.</param>
+        /// <param name="isFinalChunk">Whether <paramref name="initialChunk"/> is the only chunk in the data stream.</param>
         public CborDecoder(ReadOnlySpan<byte> initialChunk, bool isFinalChunk)
         {
             s = default;
@@ -111,6 +187,16 @@ namespace IS4.Cbor
             Initialize(nameof(initialChunk));
         }
 
+        /// <summary>
+        /// Constructs a new instance of the decoder from a previous state and the next chunk of the data stream.
+        /// </summary>
+        /// <param name="previousCheckpoint">
+        /// The checkpoint produced by a previous instance of <see cref="CborDecoder"/>,
+        /// obtained from <see cref="TryGetCheckpoint(out CborDecoderCheckpoint)"/>
+        /// or <see cref="CborCheckpointException"/>.
+        /// </param>
+        /// <param name="nextChunk">The next chunk of the data.</param>
+        /// <param name="isFinalChunk">Whether <paramref name="nextChunk"/> is the last chunk in the data stream.</param>
         public CborDecoder(scoped in CborDecoderCheckpoint previousCheckpoint, ReadOnlySpan<byte> nextChunk, bool isFinalChunk)
         {
             s = previousCheckpoint;
@@ -121,6 +207,11 @@ namespace IS4.Cbor
             Initialize(nameof(nextChunk));
         }
 
+        /// <summary>
+        /// Starts decoding the data.
+        /// </summary>
+        /// <param name="paramName">The name of the parameter that holds the data.</param>
+        /// <exception cref="ArgumentException">Thrown when invalid input is given.</exception>
         private void Initialize(string paramName)
         {
             if(!HasEnoughSpace)
@@ -130,32 +221,63 @@ namespace IS4.Cbor
             Decode();
         }
 
+        /// <summary>
+        /// Retrieves the state corresponding to the next value in the data stream.
+        /// </summary>
+        /// <returns>The value of <see cref="State"/> after decoding the next value.</returns>
+        /// <exception cref="CborContentException">
+        /// Thrown when the following data is not well-formed CBOR.
+        /// </exception>
+        /// <exception cref="CborCheckpointException">
+        /// Thrown when there is not enough data for successful decoding.
+        /// <see cref="CborCheckpointException.Checkpoint"/> stores the checkpoint
+        /// to resume the decoding via <see cref="CborDecoder.CborDecoder(in CborDecoderCheckpoint, ReadOnlySpan{byte}, bool)"/>.
+        /// </exception>
         public CborReaderState PeekState()
         {
             Decode();
             return s.State;
         }
 
+        /// <summary>
+        /// Whether there is enough space for decoding the remaining data.
+        /// </summary>
         readonly bool HasEnoughSpace {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => isFinal || currentChunk.Length - offset >= MinNonFinalChunkLength;
         }
 
+        /// <summary>
+        /// Whether a chunked string is currently processed.
+        /// </summary>
         readonly bool IsChunkedString {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.StringChunk is not StringChunkState.None;
         }
 
+        /// <summary>
+        /// Whether the decoder is currently after a string chunk
+        /// and needs to decode the next one.
+        /// </summary>
         readonly bool ShouldDecodeAfterStringChunk {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => IsChunkedString && s.ValueSize == 0;
         }
 
+        /// <summary>
+        /// Whether the decoder is currently in an indeterminate state.
+        /// </summary>
         readonly bool ShouldCallDecode {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.State == CborReaderState.Undefined || ShouldDecodeAfterStringChunk;
         }
 
+        /// <summary>
+        /// Ensures <see cref="HasEnoughSpace"/>, or throws <see cref="NeedsMoreData"/>.
+        /// </summary>
+        /// <exception cref="CborCheckpointException">
+        /// More data needs to be provided to the decoder.
+        /// </exception>
         void EnsureEnoughSpace()
         {
             if(!HasEnoughSpace)
@@ -164,6 +286,17 @@ namespace IS4.Cbor
             }
         }
 
+        /// <summary>
+        /// Moves the decoder to the next value in the data stream.
+        /// </summary>
+        /// <exception cref="CborContentException">
+        /// Thrown when the following data is not well-formed CBOR.
+        /// </exception>
+        /// <exception cref="CborCheckpointException">
+        /// Thrown when there is not enough data for successful decoding.
+        /// <see cref="CborCheckpointException.Checkpoint"/> stores the checkpoint
+        /// to resume the decoding via <see cref="CborDecoder.CborDecoder(in CborDecoderCheckpoint, ReadOnlySpan{byte}, bool)"/>.
+        /// </exception>
         public void Advance()
         {
             if(ShouldCallDecode)
@@ -231,6 +364,19 @@ namespace IS4.Cbor
             s.State = CborReaderState.Undefined;
         }
 
+        /// <summary>
+        /// Attempts to store the state of the decoder
+        /// in a <see cref="CborDecoderCheckpoint"/> instance.
+        /// </summary>
+        /// <param name="checkpoint">
+        /// The variable to store the checkpoint in. If <see langword="false"/>
+        /// is returned, the checkpoint is left uninitialized.
+        /// </param>
+        /// <returns>Whether a new checkpoint was produced.</returns>
+        /// <remarks>
+        /// When <see langword="true"/> is returned, the current instance,
+        /// is no longer in a usable state.
+        /// </remarks>
         public bool TryGetCheckpoint(out CborDecoderCheckpoint checkpoint)
         {
             if(HasEnoughSpace)
@@ -244,6 +390,13 @@ namespace IS4.Cbor
             return true;
         }
 
+        /// <summary>
+        /// Packs the current decoder state into a <see cref="CborDecoderCheckpoint"/>.
+        /// </summary>
+        /// <param name="checkpoint">The variable to store the state in.</param>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the remaining data could not fit in the checkpoint's cache.
+        /// </exception>
         internal void StoreToCheckpoint(out CborDecoderCheckpoint checkpoint)
         {
             // Copy remaining into cache
@@ -264,6 +417,10 @@ namespace IS4.Cbor
             offset = currentChunk.Length;
         }
 
+        /// <summary>
+        /// If the following value needs decoding, sets the state of the
+        /// instance accordingly.
+        /// </summary>
         private void Decode()
         {
             if(s.State != CborReaderState.Undefined)
@@ -346,7 +503,7 @@ namespace IS4.Cbor
                 s.RawValue = (byte)s.InitialByte.AdditionalInfo;
             }
 
-            if(s.StringType != 0 && s.InitialByte.Value != 0xFF && s.InitialByte.MajorType != s.StringType)
+            if(s.StringType != 0 && s.InitialByte.Value != CborInitialByte.IndefiniteLengthBreakByte && s.InitialByte.MajorType != s.StringType)
             {
                 throw new CborContentException($"Encountered wrong indefinite-length string chunk type ({s.InitialByte.MajorType} but {s.StringType} required).");
             }
@@ -454,6 +611,15 @@ namespace IS4.Cbor
             }
         }
 
+        /// <summary>
+        /// Processes the next chunk of the current string and sets the state
+        /// accordingly.
+        /// </summary>
+        /// <param name="resetToState">
+        /// The <see cref="CborDecoderCheckpoint.StringChunk"/> value to reset to
+        /// when this is the final chunk of the string.
+        /// </param>
+        /// <returns>Whether this is the final chunk of the string.</returns>
         bool ProcessStringChunk(StringChunkState resetToState)
         {
             if(offset >= 0)
@@ -546,6 +712,20 @@ namespace IS4.Cbor
             return false;
         }
 
+        /// <summary>
+        /// Looks for the end of a string to be safely returned as a single chunk.
+        /// </summary>
+        /// <param name="data">The input string.</param>
+        /// <param name="nextCharacterSize">
+        /// The expected length of the Unicode character that crosses the end of <paramref name="data"/>.
+        /// </param>
+        /// <returns>
+        /// The last position in <paramref name="data"/> that is safe to end it,
+        /// so that no UTF-8 character sequence crosses the end.
+        /// </returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the decoder is not processing a string value.
+        /// </exception>
         readonly int FindValidStringEnd(ReadOnlySpan<byte> data, out int nextCharacterSize)
         {
             switch(s.State)
@@ -634,6 +814,11 @@ namespace IS4.Cbor
             return 0;
         }
 
+        /// <summary>
+        /// Reads an atomic value at the boundary of <see cref="cache"/> and <see cref="currentChunk"/>.
+        /// </summary>
+        /// <param name="size">The size of the value.</param>
+        /// <returns>The value at the current position.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         readonly ulong ReadBoundaryBytes(int size)
         {
@@ -647,6 +832,12 @@ namespace IS4.Cbor
             };
         }
 
+        /// <summary>
+        /// Reads an atomic value from <paramref name="data"/>.
+        /// </summary>
+        /// <param name="data">The bytes to read the value from.</param>
+        /// <param name="size">The size of the value.</param>
+        /// <returns>The value at the beginning of <paramref name="data"/>.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static ulong ReadBytes(ReadOnlySpan<byte> data, int size)
         {
@@ -660,24 +851,46 @@ namespace IS4.Cbor
             };
         }
 
+        /// <summary>
+        /// Constructs an exception to throw when the data stream is ending but more data is needed.
+        /// </summary>
+        /// <returns>The new exception.</returns>
         readonly CborContentException UnexpectedEnd()
         {
             return new CborContentException($"Unexpected end of data for {s.State}.");
         }
 
+        /// <summary>
+        /// Constructs an exception to throw when the next chunk of the data stream needs to be provided.
+        /// </summary>
+        /// <returns>The new exception.</returns>
         CborCheckpointException NeedsMoreData()
         {
             return new CborCheckpointException("A new chunk needs to be provided to continue reading using the reader's checkpoint.", ref this);
         }
     }
 
+    /// <summary>
+    /// An opaque state produced by <see cref="CborDecoder"/> to share
+    /// across chunks of the input data stream.
+    /// </summary>
     [StructLayout(LayoutKind.Auto)]
     public struct CborDecoderCheckpoint
     {
-        // Must be enough to read a single value (initial byte + argument)
+        /// <summary>
+        /// The maximum size of <see cref="Cache"/>.
+        /// Must be enough to read a single value (initial byte + argument).
+        /// </summary>
         internal const int CacheMaxSize = sizeof(byte) + sizeof(ulong);
 
+        /// <summary>
+        /// The backing field for <see cref="State"/>.
+        /// </summary>
         byte _state;
+
+        /// <summary>
+        /// The current state of the decoder.
+        /// </summary>
         internal CborReaderState State {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             readonly get => (CborReaderState)_state;
@@ -685,67 +898,206 @@ namespace IS4.Cbor
             set => _state = checked((byte)value);
         }
 
+        /// <summary>
+        /// The initial byte of the current value.
+        /// </summary>
         internal CborInitialByte InitialByte;
+
+        /// <summary>
+        /// The state of the chunked string decoding.
+        /// </summary>
         internal StringChunkState StringChunk;
+
+        /// <summary>
+        /// The currently browsed string type.
+        /// </summary>
         internal CborMajorType StringType;
+
+        /// <summary>
+        /// The size of the decoded value.
+        /// </summary>
         internal int ValueSize;
+
+        /// <summary>
+        /// The raw atomic value stored in the input data.
+        /// </summary>
         internal ulong RawValue;
 
+        /// <summary>
+        /// The number of valid initial bytes in <see cref="Cache"/>.
+        /// </summary>
         internal int CacheSize;
+
+        /// <summary>
+        /// The cached bytes from the previous data chunk,
+        /// or other values that need to be reported
+        /// as a contiguous range.
+        /// </summary>
         internal unsafe fixed byte Cache[CacheMaxSize];
     }
 
+    /// <summary>
+    /// The state of chunked string processing.
+    /// </summary>
     enum StringChunkState : byte
     {
+        /// <summary>
+        /// No chunk string has occurred.
+        /// </summary>
         None = 0,
+
+        /// <summary>
+        /// A string chunk character overlaps 1 byte into the next data chunk.
+        /// </summary>
         Over1 = 1,
+
+        /// <summary>
+        /// A string chunk character overlaps 2 bytes into the next data chunk.
+        /// </summary>
         Over2 = 2,
+
+        /// <summary>
+        /// A string chunk character overlaps 3 bytes into the next data chunk.
+        /// </summary>
         Over3 = 3,
 
+        /// <summary>
+        /// A string chunk is encountered without an overlap.
+        /// </summary>
         Contiguous = 10
     }
 
+    /// <summary>
+    /// The major type of a CBOR value.
+    /// </summary>
     public enum CborMajorType : byte
     {
+        /// <summary>
+        /// An unsigned integer.
+        /// </summary>
         UnsignedInteger = 0 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A negative integer.
+        /// </summary>
         NegativeInteger = 1 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A string of bytes.
+        /// </summary>
         ByteString = 2 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A string of UTF-8 characters.
+        /// </summary>
         TextString = 3 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// An array of values.
+        /// </summary>
         Array = 4 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A map of key-value pairs.
+        /// </summary>
         Map = 5 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A tagged value.
+        /// </summary>
         Tag = 6 << CborInitialByte.MajorTypeShift,
+
+        /// <summary>
+        /// A simple/float value.
+        /// </summary>
         Simple = 7 << CborInitialByte.MajorTypeShift,
     }
 
+    /// <summary>
+    /// The additional information about a CBOR value.
+    /// </summary>
     public enum CborAdditionalInfo : byte
     {
+        /// <summary>
+        /// The actual value is stored in the next byte.
+        /// </summary>
         Additional8BitData = 24,
+
+        /// <summary>
+        /// The actual value is stored in the next 2 bytes.
+        /// </summary>
         Additional16BitData = 25,
+
+        /// <summary>
+        /// The actual value is stored in the next 4 bytes.
+        /// </summary>
         Additional32BitData = 26,
+
+        /// <summary>
+        /// The actual value is stored in the next 8 bytes.
+        /// </summary>
         Additional64BitData = 27,
+
+        /// <summary>
+        /// The length of the sequence is indefinite.
+        /// </summary>
         IndefiniteLength = 31,
     }
 
+    /// <summary>
+    /// Represents the initial byte of a CBOR value.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 1)]
     public readonly struct CborInitialByte
     {
-        public const byte IndefiniteLengthBreakByte = 0xff;
-        public const byte AdditionalInformationMask = 0b000_11111;
+        /// <summary>
+        /// The value indicating the break of an indefinite-length sequence.
+        /// </summary>
+        public const byte IndefiniteLengthBreakByte = 0xFF;
+
+        /// <summary>
+        /// The position of the major type in the byte from the right.
+        /// </summary>
         public const int MajorTypeShift = 5;
 
+        /// <summary>
+        /// The mask of the <see cref="CborAdditionalInfo"/> value.
+        /// </summary>
+        public const byte AdditionalInformationMask = (1 << MajorTypeShift) - 1;
+
+        /// <summary>
+        /// The raw value of the byte.
+        /// </summary>
         public byte Value { get; }
 
+        /// <summary>
+        /// The major type part of the byte.
+        /// </summary>
+        public CborMajorType MajorType => (CborMajorType)(Value & ~AdditionalInformationMask);
+
+        /// <summary>
+        /// The additional information part of the byte.
+        /// </summary>
+        public CborAdditionalInfo AdditionalInfo => (CborAdditionalInfo)(Value & AdditionalInformationMask);
+
+        /// <summary>
+        /// Constructs a new value using the <see cref="CborMajorType"/>
+        /// and <see cref="CborAdditionalInfo"/>.
+        /// </summary>
+        /// <param name="majorType">The value of <see cref="MajorType"/>.</param>
+        /// <param name="additionalInfo">The value of <see cref="AdditionalInfo"/>.</param>
         public CborInitialByte(CborMajorType majorType, CborAdditionalInfo additionalInfo)
         {
             Value = (byte)(((byte)majorType) | (byte)additionalInfo);
         }
 
+        /// <summary>
+        /// Constructs a new value using a single byte.
+        /// </summary>
+        /// <param name="initialByte">The value of <see cref="Value"/>.</param>
         public CborInitialByte(byte initialByte)
         {
             Value = initialByte;
         }
-
-        public CborMajorType MajorType => (CborMajorType)(Value &~ AdditionalInformationMask);
-        public CborAdditionalInfo AdditionalInfo => (CborAdditionalInfo)(Value & AdditionalInformationMask);
     }
 }
