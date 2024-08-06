@@ -175,13 +175,13 @@ namespace IS4.Cbor
         /// <summary>
         /// Whether information about nested collections is preserved.
         /// </summary>
-        public readonly bool PreserveNestedCollections {
+        public readonly bool PreservesNestedCollections {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => s.CollectionStates.IsInitialized;
         }
 
         /// <summary>
-        /// The current depth of nested collections, if <see cref="PreserveNestedCollections"/>
+        /// The current depth of nested collections, if <see cref="PreservesNestedCollections"/>
         /// is <see langword="true"/>.
         /// </summary>
         public readonly int CurrentDepth {
@@ -202,7 +202,7 @@ namespace IS4.Cbor
         /// </summary>
         public readonly ulong? RemainingCollectionElements {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => PreserveNestedCollections && s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength
+            get => PreservesNestedCollections && s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength
                 ? s.CollectionState.RemainingElements
                 : null;
         }
@@ -212,7 +212,7 @@ namespace IS4.Cbor
         /// </summary>
         /// <param name="initialChunk">The first chunk of the data.</param>
         /// <param name="isFinalChunk">Whether <paramref name="initialChunk"/> is the only chunk in the data stream.</param>
-        /// <param name="preserveNestedCollections">The value of <see cref="PreserveNestedCollections"/>.</param>
+        /// <param name="preserveNestedCollections">The value of <see cref="PreservesNestedCollections"/>.</param>
         public CborDecoder(ReadOnlySpan<byte> initialChunk, bool isFinalChunk, bool preserveNestedCollections = false)
         {
             s = default;
@@ -314,6 +314,14 @@ namespace IS4.Cbor
         }
 
         /// <summary>
+        /// Whether the current value is located in an indefinite-length string.
+        /// </summary>
+        readonly bool IsInsideIndefiniteLengthString {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => s.ContainerType is CborMajorType.TextString or CborMajorType.ByteString;
+        }
+
+        /// <summary>
         /// Ensures <see cref="HasEnoughSpace"/>, or throws <see cref="NeedsMoreData"/>.
         /// </summary>
         /// <exception cref="CborCheckpointException">
@@ -389,7 +397,7 @@ namespace IS4.Cbor
                     if(s.RawValue == 0)
                     {
                         // Simulate end of string if not within indefinite
-                        if(s.StringType == 0)
+                        if(!IsInsideIndefiniteLengthString)
                         {
                             s.State += 2;
                         }
@@ -405,7 +413,7 @@ namespace IS4.Cbor
                 case CborReaderState.StartArray:
                 case CborReaderState.StartMap:
                     // Push new state
-                    if(PreserveNestedCollections)
+                    if(PreservesNestedCollections)
                     {
                         s.CollectionStates.Push(s.CollectionState);
                         s.CollectionState.CollectionByte = s.InitialByte;
@@ -423,7 +431,7 @@ namespace IS4.Cbor
                     }
                     break;
             }
-            if(PreserveNestedCollections && s.CollectionState.RemainingElements == 0)
+            if(PreservesNestedCollections && s.CollectionState.RemainingElements == 0)
             {
                 // Virtual end state of a definite-length collection
                 switch(s.CollectionState.CollectionByte.MajorType)
@@ -581,52 +589,88 @@ namespace IS4.Cbor
                 s.RawValue = (byte)s.InitialByte.AdditionalInfo;
             }
 
-            if(s.InitialByte.Value != CborInitialByte.IndefiniteLengthBreakByte)
+            if(s.InitialByte.Value == CborInitialByte.IndefiniteLengthBreakByte)
             {
-                // A normal value
-                if(s.StringType != 0)
+                // Break code
+                switch(s.ContainerType)
                 {
-                    // A value in an indefinite-length string
-                    if(s.InitialByte.MajorType != s.StringType)
-                    {
-                        throw new CborContentException($"Encountered wrong indefinite-length string chunk type ({s.InitialByte.MajorType} but {s.StringType} required).");
-                    }
+                    case CborMajorType.TextString:
+                        s.State = CborReaderState.EndIndefiniteLengthTextString;
+                        return;
+                    case CborMajorType.ByteString:
+                        s.State = CborReaderState.EndIndefiniteLengthByteString;
+                        return;
+                    case CborMajorType.Tag:
+                        throw new CborContentException("A tag value expected.");
+                    default:
+                        if(!PreservesNestedCollections)
+                        {
+                            s.State = EndIndefiniteLengthCollection;
+                            return;
+                        }
+                        if(s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength)
+                        {
+                            throw new CborContentException("Break code encountered in a definite-length collection.");
+                        }
+                        s.State = s.CollectionState.CollectionByte.MajorType switch
+                        {
+                            CborMajorType.Array => CborReaderState.EndArray,
+                            CborMajorType.Map => CborReaderState.EndMap,
+                            _ => throw new CborContentException("Break code encountered while not in a collection.")
+                        };
+                        return;
                 }
-                else if(s.State != CborReaderState.Tag)
+            }
+            // A normal value
+
+            if(IsInsideIndefiniteLengthString)
+            {
+                // A value in an indefinite-length string
+                if(s.InitialByte.MajorType != s.ContainerType)
                 {
-                    // A singular value
-                    switch(s.CollectionState.CollectionByte.MajorType)
-                    {
-                        // Update collection state if any
-                        case CborMajorType.Array:
+                    throw new CborContentException($"Encountered wrong indefinite-length string chunk type ({s.InitialByte.MajorType} but {s.ContainerType} required).");
+                }
+            }
+            else if(s.State == CborReaderState.Tag)
+            {
+                // Tag value expected
+                s.ContainerType = CborMajorType.Tag;
+            }
+            else
+            {
+                // A singular value
+                s.ContainerType = 0;
+                switch(s.CollectionState.CollectionByte.MajorType)
+                {
+                    // Update collection state if any
+                    case CborMajorType.Array:
+                        if(s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength)
+                        {
+                            // Decrement remaining elements
+                            --s.CollectionState.RemainingElements;
+                        }
+                        break;
+                    case CborMajorType.Map:
+                        if(s.CollectionState.NextIsValue)
+                        {
+                            // Move to value state
+                            s.CollectionState.NextIsValue = false;
+                        }
+                        else
+                        {
+                            // Move to key state
+                            s.CollectionState.NextIsValue = true;
                             if(s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength)
                             {
                                 // Decrement remaining elements
-                                --s.CollectionState.RemainingElements;
-                            }
-                            break;
-                        case CborMajorType.Map:
-                            if(s.CollectionState.NextIsValue)
-                            {
-                                // Move to value state
-                                s.CollectionState.NextIsValue = false;
-                            }
-                            else
-                            {
-                                // Move to key state
-                                s.CollectionState.NextIsValue = true;
-                                if(s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength)
+                                if(--s.CollectionState.RemainingElements != 0)
                                 {
-                                    // Decrement remaining elements
-                                    if(--s.CollectionState.RemainingElements != 0)
-                                    {
-                                        // Move to key state
-                                        s.CollectionState.NextIsValue = true;
-                                    }
+                                    // Move to key state
+                                    s.CollectionState.NextIsValue = true;
                                 }
                             }
-                            break;
-                    }
+                        }
+                        break;
                 }
             }
 
@@ -637,13 +681,13 @@ namespace IS4.Cbor
                     if(s.ValueSize == -1)
                     {
                         // Indefinite length
-                        if(s.StringType != 0)
+                        if(IsInsideIndefiniteLengthString)
                         {
                             // Nested
                             throw new CborContentException($"Indefinite-length {s.State} encountered inside another.");
                         }
                         // Store type and move to the Start state
-                        s.StringType = s.InitialByte.MajorType;
+                        s.ContainerType = s.InitialByte.MajorType;
                         s.State++;
                         return;
                     }
@@ -652,7 +696,7 @@ namespace IS4.Cbor
                     {
                         Debug.Assert(IsChunkedString);
                         // Simulate indefinite length if not already
-                        if(s.StringType == 0)
+                        if(!IsInsideIndefiniteLengthString)
                         {
                             s.State++;
                         }
@@ -663,35 +707,16 @@ namespace IS4.Cbor
                     // Indefinite-length permitted
                     return;
             }
+            // Not a string/array/map
 
             if(s.ValueSize == -1)
             {
-                if(s.State != CborReaderState.SimpleValue)
-                {
-                    throw new CborContentException($"Invalid value byte 0x{s.InitialByte.Value:X2} (indefinite length specified for atomic value).");
-                }
-                // Break code
-                switch(s.StringType)
-                {
-                    case CborMajorType.TextString:
-                        s.State = CborReaderState.EndIndefiniteLengthTextString;
-                        return;
-                    case CborMajorType.ByteString:
-                        s.State = CborReaderState.EndIndefiniteLengthByteString;
-                        return;
-                    default:
-                        s.State = s.CollectionState.CollectionByte.MajorType switch
-                        {
-                            CborMajorType.Array => CborReaderState.EndArray,
-                            CborMajorType.Map => CborReaderState.EndMap,
-                            _ => EndIndefiniteLengthCollection
-                        };
-                        return;
-                }
+                throw new CborContentException($"Invalid value byte 0x{s.InitialByte.Value:X2} (indefinite length specified for atomic value).");
             }
 
             if(s.State != CborReaderState.SimpleValue)
             {
+                // All done
                 return;
             }
 
@@ -1036,9 +1061,9 @@ namespace IS4.Cbor
         internal StringChunkState StringChunk;
 
         /// <summary>
-        /// The currently browsed string type.
+        /// The currently open container type.
         /// </summary>
-        internal CborMajorType StringType;
+        internal CborMajorType ContainerType;
 
         /// <summary>
         /// The collection state at this depth.
