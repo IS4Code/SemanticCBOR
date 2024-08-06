@@ -11,8 +11,9 @@ namespace IS4.Cbor
     /// <summary>
     /// A CBOR decoder used for reading primitive CBOR tokens from data.
     /// </summary>
+    /// <typeparam name="TBuffer"><inheritdoc cref="CborDecoderCheckpoint{TBuffer}{TBuffer}" path="/typeparam[@name='TBuffer']"/></typeparam>
     [StructLayout(LayoutKind.Auto)]
-    public ref partial struct CborDecoder
+    public ref partial struct CborDecoder<TBuffer> where TBuffer : unmanaged
     {
         /// <summary>
         /// A special state indicating the end of an indefinite-length array or map when its proper type is not known.
@@ -22,12 +23,12 @@ namespace IS4.Cbor
         /// <summary>
         /// The minimum size that a chunk before the end of the stream must have to be accepted.
         /// </summary>
-        public const int MinNonFinalChunkLength = CborDecoderCheckpoint.CacheMaxSize;
+        public static readonly int MinNonFinalChunkLength = CborDecoderCheckpoint<TBuffer>.CacheMaxSize;
 
         /// <summary>
         /// The current state of the decoder.
         /// </summary>
-        CborDecoderCheckpoint s;
+        CborDecoderCheckpoint<TBuffer> s;
 
         /// <summary>
         /// The current chunk of data processed by the decoder.
@@ -52,9 +53,9 @@ namespace IS4.Cbor
             [UnscopedRef]
             get {
                 // This is a ref struct so the fields are already fixed
-                fixed(byte* ptr = s.Cache)
+                fixed(void* ptr = &s.Cache)
                 {
-                    Debug.Assert(s.CacheSize <= CborDecoderCheckpoint.CacheMaxSize);
+                    Debug.Assert(s.CacheSize <= CborDecoderCheckpoint<TBuffer>.CacheMaxSize);
                     return new Span<byte>(ptr, s.CacheSize);
                 }
             }
@@ -238,7 +239,7 @@ namespace IS4.Cbor
         /// </param>
         /// <param name="nextChunk">The next chunk of the data.</param>
         /// <param name="isFinalChunk">Whether <paramref name="nextChunk"/> is the last chunk in the data stream.</param>
-        public CborDecoder(scoped in CborDecoderCheckpoint previousCheckpoint, ReadOnlySpan<byte> nextChunk, bool isFinalChunk)
+        public CborDecoder(scoped in CborDecoderCheckpoint<TBuffer> previousCheckpoint, ReadOnlySpan<byte> nextChunk, bool isFinalChunk)
         {
             s = previousCheckpoint;
             currentChunk = nextChunk;
@@ -255,6 +256,10 @@ namespace IS4.Cbor
         /// <exception cref="ArgumentException">Thrown when invalid input is given.</exception>
         private void Initialize(string paramName)
         {
+            if(MinNonFinalChunkLength < CborDefaultBuffer.Size)
+            {
+                throw new NotSupportedException($"Type {typeof(TBuffer)} used as the cache array must take at least {CborDefaultBuffer.Size} bytes to be usable.");
+            }
             if(!HasEnoughSpace)
             {
                 throw new ArgumentException($"Non-final input data chunk must have at least {MinNonFinalChunkLength} bytes.", paramName);
@@ -460,7 +465,7 @@ namespace IS4.Cbor
         /// When <see langword="true"/> is returned, the current instance,
         /// is no longer in a usable state.
         /// </remarks>
-        public bool TryGetCheckpoint(out CborDecoderCheckpoint checkpoint)
+        public bool TryGetCheckpoint(out CborDecoderCheckpoint<TBuffer> checkpoint)
         {
             if(HasEnoughSpace)
             {
@@ -482,11 +487,11 @@ namespace IS4.Cbor
         /// <exception cref="InvalidOperationException">
         /// Thrown when the remaining data could not fit in the checkpoint's cache.
         /// </exception>
-        internal void StoreToCheckpoint(out CborDecoderCheckpoint checkpoint)
+        internal void StoreToCheckpoint(out CborDecoderCheckpoint<TBuffer> checkpoint)
         {
             // Copy remaining into cache
             var remaining = chunkView;
-            if(remaining.Length > CborDecoderCheckpoint.CacheMaxSize)
+            if(remaining.Length > CborDecoderCheckpoint<TBuffer>.CacheMaxSize)
             {
                 throw new InvalidOperationException("Remaining chunk data is too big to fit into a checkpoint.");
             }
@@ -804,7 +809,7 @@ namespace IS4.Cbor
             }
 
             // Starts within the cached range
-            if(s.RawValue <= CborDecoderCheckpoint.CacheMaxSize && unchecked(offset + (int)s.RawValue <= 0))
+            if(s.RawValue <= (ulong)CborDecoderCheckpoint<TBuffer>.CacheMaxSize && unchecked(offset + (int)s.RawValue <= 0))
             {
                 // Ends within the cached range - safe to return
                 s.ValueSize = unchecked((int)s.RawValue);
@@ -1016,9 +1021,9 @@ namespace IS4.Cbor
         /// Constructs an exception to throw when the next chunk of the data stream needs to be provided.
         /// </summary>
         /// <returns>The new exception.</returns>
-        CborCheckpointException NeedsMoreData()
+        CborCheckpointException<TBuffer> NeedsMoreData()
         {
-            return new CborCheckpointException("A new chunk needs to be provided to continue reading using the reader's checkpoint.", ref this);
+            return new CborCheckpointException<TBuffer>("A new chunk needs to be provided to continue reading using the reader's checkpoint.", ref this);
         }
     }
 
@@ -1026,14 +1031,17 @@ namespace IS4.Cbor
     /// An opaque state produced by <see cref="CborDecoder"/> to share
     /// across chunks of the input data stream.
     /// </summary>
+    /// <typeparam name="TBuffer">
+    /// The inline array type used to hold cached bytes.
+    /// Must have at least <see cref="CborDefaultBuffer.Size"/> bytes.
+    /// </typeparam>
     [StructLayout(LayoutKind.Auto)]
-    public struct CborDecoderCheckpoint
+    public struct CborDecoderCheckpoint<TBuffer> where TBuffer : unmanaged
     {
         /// <summary>
         /// The maximum size of <see cref="Cache"/>.
-        /// Must be enough to read a single value (initial byte + argument).
         /// </summary>
-        internal const int CacheMaxSize = sizeof(byte) + sizeof(ulong);
+        internal static readonly int CacheMaxSize = Unsafe.SizeOf<TBuffer>();
 
         /// <summary>
         /// The backing field for <see cref="State"/>.
@@ -1095,7 +1103,19 @@ namespace IS4.Cbor
         /// or other values that need to be reported
         /// as a contiguous range.
         /// </summary>
-        internal unsafe fixed byte Cache[CacheMaxSize];
+        internal TBuffer Cache;
+    }
+
+    /// <summary>
+    /// An unmanaged type of size <see cref="Size"/> used to hold temporary byte data.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = Size)]
+    public struct CborDefaultBuffer
+    {
+        /// <summary>
+        /// The size of this cache type.
+        /// </summary>
+        public const int Size = sizeof(byte) + sizeof(ulong);
     }
 
     /// <summary>

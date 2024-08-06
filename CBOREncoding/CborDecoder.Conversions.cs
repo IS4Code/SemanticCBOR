@@ -8,7 +8,7 @@ namespace IS4.Cbor
 {
     using static CborReaderState;
 
-    partial struct CborDecoder
+    partial struct CborDecoder<TBuffer>
     {
         /// <summary>
         /// The current string value decoded as UTF-8.
