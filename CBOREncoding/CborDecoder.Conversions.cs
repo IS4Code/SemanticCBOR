@@ -8,6 +8,11 @@ namespace IS4.Cbor
 {
     using static CborReaderState;
 
+    public interface IGenericReceiver<in TArgs, out TResult>
+    {
+        TResult Invoke<TValue>(TValue value, TArgs args);
+    }
+
     partial struct CborDecoder<TBuffer>
     {
         /// <summary>
@@ -17,7 +22,7 @@ namespace IS4.Cbor
         /// <see cref="State"/> is not <see cref="TextString"/>
         /// or <see cref="CborReaderState.ByteString"/>.
         /// </exception>
-        public readonly unsafe string StringValue {
+        public readonly unsafe string TextStringValue {
             get {
                 var bytes = ValueBytes;
                 if(bytes.Length == 0)
@@ -258,32 +263,75 @@ namespace IS4.Cbor
             _ => throw new InvalidOperationException("The current value is not a simple value.")
         };
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private readonly TResult RetrieveValueCore<TArgs, TResult, TReceiver>(ref TReceiver receiver, TArgs args) where TReceiver : IGenericReceiver<TArgs, TResult>
+        {
+            return s.State switch
+            {
+                UnsignedInteger when s.ValueSize <= 1 => receiver.Invoke(ByteValue, args),
+                UnsignedInteger when s.ValueSize <= 2 => receiver.Invoke(UInt16Value, args),
+                UnsignedInteger when s.ValueSize <= 4 => receiver.Invoke(UInt32Value, args),
+                UnsignedInteger when s.ValueSize <= 8 => receiver.Invoke(UInt64Value, args),
+                UnsignedInteger => receiver.Invoke(IntegerValue, args),
+                NegativeInteger when s.ValueSize <= 1 => RawValue > (ulong)SByte.MaxValue ? receiver.Invoke(Int16Value, args) : receiver.Invoke(SByteValue, args),
+                NegativeInteger when s.ValueSize <= 2 => RawValue > (ulong)Int16.MaxValue ? receiver.Invoke(Int32Value, args) : receiver.Invoke(Int16Value, args),
+                NegativeInteger when s.ValueSize <= 4 => RawValue > Int32.MaxValue ? receiver.Invoke(Int64Value, args) : receiver.Invoke(Int32Value, args),
+                NegativeInteger when s.ValueSize <= 8 => RawValue > Int64.MaxValue ? receiver.Invoke(IntegerValue, args) : receiver.Invoke(Int64Value, args),
+                NegativeInteger => receiver.Invoke(IntegerValue, args),
+                HalfPrecisionFloat => receiver.Invoke(HalfValue, args),
+                SinglePrecisionFloat => receiver.Invoke(SingleValue, args),
+                DoublePrecisionFloat => receiver.Invoke(DoubleValue, args),
+                TextString => receiver.Invoke(TextStringValue, args),
+                CborReaderState.ByteString => receiver.Invoke(ByteStringValue, args),
+                Boolean => receiver.Invoke(RawValue != 0, args),
+                Null or CborReaderState.SimpleValue => receiver.Invoke((CborSimpleValue)RawValue, args),
+                Tag => receiver.Invoke((CborTag)RawValue, args),
+                _ => receiver.Invoke<object?>(null, args)
+            };
+        }
+
+        /// <summary>
+        /// Retrieves a typed value corresponding to the current atomic value,
+        /// through an instance of <see cref="IGenericReceiver{TArgs, TResult}"/>.
+        /// </summary>
+        /// <typeparam name="TArgs">The type of <paramref name="args"/>.</typeparam>
+        /// <typeparam name="TResult">The result of invoking <paramref name="receiver"/>.</typeparam>
+        /// <typeparam name="TReceiver">The type of <paramref name="receiver"/>.</typeparam>
+        /// <param name="receiver">The instance to receive the value.</param>
+        /// <param name="args">The arguments given to <paramref name="receiver"/>.</param>
+        /// <returns>The result of invoking <paramref name="receiver"/>.</returns>
+        public readonly TResult RetrieveValue<TArgs, TResult, TReceiver>(ref TReceiver receiver, TArgs args) where TReceiver : struct, IGenericReceiver<TArgs, TResult>
+        {
+            return RetrieveValueCore<TArgs, TResult, TReceiver>(ref receiver, args);
+        }
+
+        /// <inheritdoc cref="RetrieveValue{TArgs, TResult, TReceiver}(ref TReceiver, TArgs)"/>
+        public readonly TResult RetrieveValue<TArgs, TResult, TReceiver>(TReceiver receiver, TArgs args) where TReceiver : IGenericReceiver<TArgs, TResult>
+        {
+            return RetrieveValueCore<TArgs, TResult, TReceiver>(ref receiver, args);
+        }
+
+        /// <inheritdoc cref="RetrieveValue{TArgs, TResult, TReceiver}(ref TReceiver, TArgs)"/>
+        public readonly TResult RetrieveValue<TArgs, TResult>(IGenericReceiver<TArgs, TResult> receiver, TArgs args)
+        {
+            return RetrieveValueCore<TArgs, TResult, IGenericReceiver<TArgs, TResult>>(ref receiver, args);
+        }
+
         /// <summary>
         /// The current atomic value, or <see langword="null"/>
         /// if no such value could be retrieved.
         /// </summary>
-        public readonly object? ObjectValue => s.State switch
+        public readonly object? ObjectValue => RetrieveValue<ValueTuple, object?, BoxingReceiver>(ref BoxingReceiver.Instance, default);
+
+        readonly struct BoxingReceiver : IGenericReceiver<ValueTuple, object?>
         {
-            UnsignedInteger when s.ValueSize <= 1 => ByteValue,
-            UnsignedInteger when s.ValueSize <= 2 => UInt16Value,
-            UnsignedInteger when s.ValueSize <= 4 => UInt32Value,
-            UnsignedInteger when s.ValueSize <= 8 => UInt64Value,
-            UnsignedInteger => IntegerValue,
-            NegativeInteger when s.ValueSize <= 1 => RawValue > (ulong)SByte.MaxValue ? Int16Value : SByteValue,
-            NegativeInteger when s.ValueSize <= 2 => RawValue > (ulong)Int16.MaxValue ? Int32Value : Int16Value,
-            NegativeInteger when s.ValueSize <= 4 => RawValue > Int32.MaxValue ? Int64Value : Int32Value,
-            NegativeInteger when s.ValueSize <= 8 => RawValue > Int64.MaxValue ? IntegerValue : Int64Value,
-            NegativeInteger => IntegerValue,
-            HalfPrecisionFloat => HalfValue,
-            SinglePrecisionFloat => SingleValue,
-            DoublePrecisionFloat => DoubleValue,
-            TextString => StringValue,
-            CborReaderState.ByteString => ByteStringValue,
-            Boolean => RawValue != 0,
-            Null or CborReaderState.SimpleValue => (CborSimpleValue)RawValue,
-            Tag => (CborTag)RawValue,
-            _ => null
-        };
+            public static BoxingReceiver Instance = new();
+
+            public object? Invoke<TValue>(TValue value, ValueTuple args)
+            {
+                return value;
+            }
+        }
 
         static float Int32BitsToSingle(int x) => Unsafe.As<int, float>(ref x);
     }

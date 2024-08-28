@@ -24,16 +24,16 @@ namespace IS4.Cbor
     /// <summary>
     /// An exception type thrown when new data needs to be provided to <see cref="CborDecoder{TBuffer}"/>.
     /// </summary>
-    /// <typeparam name="TBuffer"><inheritdoc cref="CborDecoderCheckpoint{TBuffer}{TBuffer}" path="/typeparam[@name='TBuffer']"/></typeparam>
+    /// <typeparam name="TBuffer"><inheritdoc cref="CborDecoder{TBuffer}{TBuffer}" path="/typeparam[@name='TBuffer']"/></typeparam>
     public sealed class CborCheckpointException<TBuffer> : CborException where TBuffer : unmanaged
     {
-        readonly CborDecoderCheckpoint<TBuffer> checkpoint;
+        readonly CborDecoder<TBuffer>.Checkpoint checkpoint;
 
         /// <summary>
         /// The checkpoint stored by the previous <see cref="CborDecoder{TBuffer}"/>
         /// instance that needs to be used to initialize the next one.
         /// </summary>
-        public ref readonly CborDecoderCheckpoint<TBuffer> Checkpoint {
+        public ref readonly CborDecoder<TBuffer>.Checkpoint Checkpoint {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => ref checkpoint;
         }
