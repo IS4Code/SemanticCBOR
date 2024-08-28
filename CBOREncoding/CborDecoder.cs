@@ -29,64 +29,77 @@ namespace IS4.Cbor
         public static readonly int MinNonFinalChunkLength = Checkpoint.CacheMaxSize;
 
         /// <summary>
-        /// The current state of the decoder.
+        /// The current value of the decoder.
         /// </summary>
-        Checkpoint s;
+        Value currentValue;
 
         /// <summary>
-        /// The current chunk of data processed by the decoder.
+        /// Retrieves information about the currently decoded value.
         /// </summary>
-        readonly ReadOnlySpan<byte> currentChunk;
+        public ref readonly Value Result {
+            [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref currentValue;
+        }
+
+        /// <inheritdoc cref="Value.State"/>
+        public readonly CborReaderState State {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => currentValue.State;
+        }
+
+        /// <inheritdoc cref="Value.Checkpoint"/>
+        ref Checkpoint s {
+            [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref currentValue.Checkpoint;
+        }
+
+        /// <inheritdoc cref="Value.Checkpoint"/>
+        readonly ref readonly Checkpoint sr {
+            [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref currentValue.Checkpoint;
+        }
+
+        /// <inheritdoc cref="Value.CurrentChunk"/>
+        readonly ReadOnlySpan<byte> currentChunk {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => currentValue.CurrentChunk;
+        }
 
         /// <summary>
         /// Whether <see cref="currentChunk"/> is the final chunk in the stream.
         /// </summary>
         readonly bool isFinal;
 
-        /// <summary>
-        /// The current position in <see cref="currentChunk"/>.
-        /// May be negative, in which case it points into <see cref="cache"/> from the end.
-        /// </summary>
-        int offset;
-
-        /// <summary>
-        /// Accesses the previously cached data.
-        /// </summary>
-        readonly unsafe Span<byte> cache {
-            [UnscopedRef]
-            get {
-                // This is a ref struct so the fields are already fixed
-                fixed(void* ptr = &s.Cache)
-                {
-                    Debug.Assert(s.CacheSize <= Checkpoint.CacheMaxSize);
-                    return new Span<byte>(ptr, s.CacheSize);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Accesses the data in <see cref="currentChunk"/> beginning at <see cref="offset"/>.
-        /// </summary>
-        readonly ReadOnlySpan<byte> chunkView {
+        /// <inheritdoc cref="Value.Offset"/>
+        int offset {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => currentChunk[offset..];
+            readonly get => currentValue.Offset;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set => currentValue.Offset = value;
         }
 
-        /// <summary>
-        /// Accesses the data in <see cref="cache"/> beginning at <see cref="offset"/>.
-        /// </summary>
+        /// <inheritdoc cref="Value.Cache"/>
+        readonly unsafe Span<byte> cache {
+            [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => currentValue.Cache;
+        }
+
+        /// <inheritdoc cref="Value.ChunkView"/>
+        readonly ReadOnlySpan<byte> chunkView {
+            [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => currentValue.ChunkView;
+        }
+
+        /// <inheritdoc cref="Value.CacheView"/>
         readonly ReadOnlySpan<byte> cacheView {
             [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => cache[^-offset..];
+            get => currentValue.CacheView;
         }
 
-        /// <summary>
-        /// Obtains either <see cref="chunkView"/> or <see cref="cacheView"/> based on
-        /// the sign of <see cref="offset"/>.
-        /// </summary>
+        /// <inheritdoc cref="Value.DataView"/>
         readonly ReadOnlySpan<byte> dataView {
             [UnscopedRef, MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => offset >= 0 ? chunkView : cacheView;
+            get => currentValue.DataView;
         }
 
         /// <summary>
@@ -101,122 +114,10 @@ namespace IS4.Cbor
                 if(index < 0)
                 {
                     // From cacheView end
-                    return cache[s.CacheSize + index];
+                    return cache[sr.CacheSize + index];
                 }
                 return currentChunk[index];
             }
-        }
-
-        /// <summary>
-        /// When <see cref="State"/> is <see cref="CborReaderState.TextString"/>
-        /// or <see cref="CborReaderState.ByteString"/>, contains the value
-        /// of the string as bytes.
-        /// </summary>
-        /// <exception cref="InvalidOperationException">
-        /// <see cref="State"/> is not <see cref="CborReaderState.TextString"/>
-        /// or <see cref="CborReaderState.ByteString"/>.
-        /// </exception>
-        public readonly ReadOnlySpan<byte> ValueBytes {
-            [UnscopedRef]
-            get {
-                switch(s.State)
-                {
-                    case CborReaderState.ByteString:
-                    case CborReaderState.TextString:
-                        break;
-                    default:
-                        throw new InvalidOperationException($"Value bytes are exposed only for immediate string values (current state is {s.State}).");
-                }
-                // Never set to overlap both spans
-                return dataView.Slice(0, s.ValueSize);
-            }
-        }
-        
-        /// <summary>
-        /// The current state of the decoder.
-        /// </summary>
-        public readonly CborReaderState State {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.State;
-        }
-
-        /// <summary>
-        /// The initial byte header of the current value.
-        /// </summary>
-        public readonly CborInitialByte InitialByte {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.InitialByte;
-        }
-
-        /// <summary>
-        /// Retrieves the raw size of the value. If <see cref="ValueBytes"/>
-        /// is available, retrieves its length. In other states that have a value,
-        /// retrieves the size of <see cref="RawValue"/>.
-        /// </summary>
-        public readonly int RawSize {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.ValueSize;
-        }
-
-        /// <summary>
-        /// The atomic value corresponding to the current state.
-        /// For definite-length collections, this value stores the number
-        /// of the elements in the collection.
-        /// </summary>
-        public readonly ulong RawValue {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.RawValue;
-        }
-
-        /// <summary>
-        /// Whether the current value is marked as having indefinite length in the data.
-        /// </summary>
-        public readonly bool IsIndefiniteLength {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.InitialByte.AdditionalInfo == CborAdditionalInfo.IndefiniteLength;
-        }
-
-        /// <summary>
-        /// The length of the current sequence value.
-        /// </summary>
-        public readonly ulong? ValueLength {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => IsIndefiniteLength ? null : RawValue;
-        }
-
-        /// <summary>
-        /// Whether information about nested collections is preserved.
-        /// </summary>
-        public readonly bool PreservesNestedCollections {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.CollectionStates.IsInitialized;
-        }
-
-        /// <summary>
-        /// The current depth of nested collections, if <see cref="PreservesNestedCollections"/>
-        /// is <see langword="true"/>.
-        /// </summary>
-        public readonly int CurrentDepth {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.CollectionStates.Count;
-        }
-
-        /// <summary>
-        /// Whether the current value is a key in a map.
-        /// </summary>
-        public readonly bool IsMapKey {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => !s.CollectionState.NextIsValue;
-        }
-
-        /// <summary>
-        /// The number of remaining elements in the current collection, if available.
-        /// </summary>
-        public readonly ulong? RemainingCollectionElements {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => PreservesNestedCollections && s.CollectionState.CollectionByte.AdditionalInfo != CborAdditionalInfo.IndefiniteLength
-                ? s.CollectionState.RemainingElements
-                : null;
         }
 
         /// <summary>
@@ -227,13 +128,7 @@ namespace IS4.Cbor
         /// <param name="preserveNestedCollections">The value of <see cref="PreservesNestedCollections"/>.</param>
         public CborDecoder(ReadOnlySpan<byte> initialChunk, bool isFinalChunk, bool preserveNestedCollections = false)
         {
-            s = default;
-            if(preserveNestedCollections)
-            {
-                s.CollectionStates = new();
-            }
-            s.CollectionState.NextIsValue = true;
-            currentChunk = initialChunk;
+            currentValue = new(preserveNestedCollections, initialChunk);
             isFinal = isFinalChunk;
             offset = 0;
 
@@ -252,8 +147,7 @@ namespace IS4.Cbor
         /// <param name="isFinalChunk">Whether <paramref name="nextChunk"/> is the last chunk in the data stream.</param>
         public CborDecoder(scoped in Checkpoint previousCheckpoint, ReadOnlySpan<byte> nextChunk, bool isFinalChunk)
         {
-            s = previousCheckpoint;
-            currentChunk = nextChunk;
+            currentValue = new(previousCheckpoint, nextChunk);
             isFinal = isFinalChunk;
             offset = -s.CacheSize;
 
@@ -309,7 +203,7 @@ namespace IS4.Cbor
         /// </summary>
         readonly bool IsChunkedString {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.StringChunk is not StringChunkState.None;
+            get => sr.StringChunk is not StringChunkState.None;
         }
 
         /// <summary>
@@ -318,7 +212,7 @@ namespace IS4.Cbor
         /// </summary>
         readonly bool ShouldDecodeAfterStringChunk {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => IsChunkedString && s.ValueSize == 0;
+            get => IsChunkedString && sr.ValueSize == 0;
         }
 
         /// <summary>
@@ -326,7 +220,7 @@ namespace IS4.Cbor
         /// </summary>
         readonly bool ShouldCallDecode {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.State == CborReaderState.Undefined || ShouldDecodeAfterStringChunk;
+            get => sr.State == CborReaderState.Undefined || ShouldDecodeAfterStringChunk;
         }
 
         /// <summary>
@@ -334,7 +228,7 @@ namespace IS4.Cbor
         /// </summary>
         readonly bool IsInsideIndefiniteLengthString {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => s.ContainerType is CborMajorType.TextString or CborMajorType.ByteString;
+            get => sr.ContainerType is CborMajorType.TextString or CborMajorType.ByteString;
         }
 
         /// <summary>
@@ -429,7 +323,7 @@ namespace IS4.Cbor
                 case CborReaderState.StartArray:
                 case CborReaderState.StartMap:
                     // Push new state
-                    if(PreservesNestedCollections)
+                    if(currentValue.PreservesNestedCollections)
                     {
                         s.CollectionStates.Push(s.CollectionState);
                         s.CollectionState.CollectionByte = s.InitialByte;
@@ -447,7 +341,7 @@ namespace IS4.Cbor
                     }
                     break;
             }
-            if(PreservesNestedCollections && s.CollectionState.RemainingElements == 0)
+            if(currentValue.PreservesNestedCollections && s.CollectionState.RemainingElements == 0)
             {
                 // Virtual end state of a definite-length collection
                 switch(s.CollectionState.CollectionByte.MajorType)
@@ -619,7 +513,7 @@ namespace IS4.Cbor
                     case CborMajorType.Tag:
                         throw new CborContentException("A tag value expected.");
                     default:
-                        if(!PreservesNestedCollections)
+                        if(!currentValue.PreservesNestedCollections)
                         {
                             s.State = EndIndefiniteLengthCollection;
                             return;
@@ -896,7 +790,7 @@ namespace IS4.Cbor
         /// </exception>
         readonly int FindValidStringEnd(ReadOnlySpan<byte> data, out int nextCharacterSize)
         {
-            switch(s.State)
+            switch(sr.State)
             {
                 case CborReaderState.ByteString:
                 case CborReaderState.StartIndefiniteLengthByteString:
@@ -906,7 +800,7 @@ namespace IS4.Cbor
                 case CborReaderState.StartIndefiniteLengthTextString:
                     break;
                 default:
-                    throw new InvalidOperationException($"String value cannot be retrieved in state {s.State}.");
+                    throw new InvalidOperationException($"String value cannot be retrieved in state {sr.State}.");
             }
             int dataOffset = data.Length;
             while(dataOffset != 0)
@@ -954,10 +848,10 @@ namespace IS4.Cbor
                 {
                     // The character ends past the span
                     nextCharacterSize = sequenceSize;
-                    if(unchecked((uint)sequenceEnd) > s.RawValue)
+                    if(unchecked((uint)sequenceEnd) > sr.RawValue)
                     {
                         // The character cannot fit in the reported string size 
-                        throw new CborContentException($"Unexpected UTF-8 string end: byte 0x{b:X2} at position {dataOffset} needs {sequenceSize - 1} bytes to follow, but there are only {unchecked((int)s.RawValue - dataOffset - 1)}.");
+                        throw new CborContentException($"Unexpected UTF-8 string end: byte 0x{b:X2} at position {dataOffset} needs {sequenceSize - 1} bytes to follow, but there are only {unchecked((int)sr.RawValue - dataOffset - 1)}.");
                     }
                     return dataOffset;
                 }
@@ -1025,7 +919,7 @@ namespace IS4.Cbor
         /// <returns>The new exception.</returns>
         readonly CborContentException UnexpectedEnd()
         {
-            return new CborContentException($"Unexpected end of data for {s.State}.");
+            return new CborContentException($"Unexpected end of data for {sr.State}.");
         }
 
         /// <summary>

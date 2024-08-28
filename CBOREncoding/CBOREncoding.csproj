@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>IS4.Cbor</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <WarningsAsErrors>CS8656</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
