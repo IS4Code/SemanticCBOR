@@ -11,13 +11,28 @@ namespace IS4.Cbor
 {
     using static CborReaderState;
 
+    /// <summary>
+    /// Supports receiving a value of an arbitrary type.
+    /// </summary>
+    /// <typeparam name="TArgs">Additional arguments given to the receiver.</typeparam>
+    /// <typeparam name="TResult">The result produced by the receiver.</typeparam>
     public interface IGenericReceiver<in TArgs, out TResult>
     {
+        /// <summary>
+        /// Invokes the receiver with the value and additional arguments.
+        /// </summary>
+        /// <typeparam name="TValue">The type of <paramref name="value"/>.</typeparam>
+        /// <param name="value">The value given to the receiver.</param>
+        /// <param name="args">Additional arguments to the receiver.</param>
+        /// <returns>The value produced by the receiver.</returns>
         TResult Invoke<TValue>(TValue value, TArgs args);
     }
 
     partial struct CborDecoder<TBuffer>
     {
+        /// <summary>
+        /// Stores information about a value obtained as a result of CBOR decoding.
+        /// </summary>
         [StructLayout(LayoutKind.Auto)]
         public ref partial struct Value
         {
@@ -59,10 +74,10 @@ namespace IS4.Cbor
             }
 
             /// <summary>
-            /// The current position in <see cref="CurrentChunk"/>.
-            /// May be negative, in which case it points into <see cref="Cache"/> from the end.
+            /// The current position in the currently decoded chunk.
+            /// May be negative, in which case it points into the cached bytes from the previous chunk.
             /// </summary>
-            internal int Offset;
+            public int Offset { get; internal set; }
 
             /// <summary>
             /// Accesses the previously cached data.
