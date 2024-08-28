@@ -5,6 +5,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace IS4.Cbor
 {
@@ -202,10 +204,7 @@ namespace IS4.Cbor
     /// </summary>
     public static class ByteStringOverloadExtensions
     {
-        /// <summary>
-        /// Writes a byte string to the stream and advances the current
-        /// position within this stream by the number of bytes written.
-        /// </summary>
+        /// <inheritdoc cref="Stream.Write(byte[], int, int)"/>
         /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
         /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
         public static void Write(this Stream stream, ByteString byteString)
@@ -213,41 +212,76 @@ namespace IS4.Cbor
             stream.Write(byteString.Data, 0, byteString.Length);
         }
 
-        /// <summary>
-        /// Writes a byte string to the stream and advances the current
-        /// position within this stream by the number of bytes written.
-        /// </summary>
+        /// <inheritdoc cref="Stream.WriteAsync(byte[], int, int)"/>
         /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
         /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
-        /// <param name="offset">The offset within <paramref name="byteString"/> to read from.</param>
-        /// <param name="count">The number of characters to write.</param>
+        public static Task WriteAsync(this Stream stream, ByteString byteString)
+        {
+            return stream.WriteAsync(byteString.Data, 0, byteString.Length);
+        }
+
+        /// <inheritdoc cref="Stream.WriteAsync(byte[], int, int, CancellationToken)"/>
+        /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
+        /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
+        public static Task WriteAsync(this Stream stream, ByteString byteString, CancellationToken cancellationToken)
+        {
+            return stream.WriteAsync(byteString.Data, 0, byteString.Length, cancellationToken);
+        }
+
+        /// <inheritdoc cref="Stream.Write(byte[], int, int)"/>
+        /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
+        /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
         public static void Write(this Stream stream, ByteString byteString, int offset, int count)
         {
             stream.Write(byteString.Data, offset, count);
         }
 
-        /// <summary>
-        /// Decodes the bytes in the specified byte string into a string.
-        /// </summary>
+        /// <inheritdoc cref="Stream.WriteAsync(byte[], int, int)"/>
+        /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
+        /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
+        public static Task WriteAsync(this Stream stream, ByteString byteString, int offset, int count)
+        {
+            return stream.WriteAsync(byteString.Data, offset, count);
+        }
+
+        /// <inheritdoc cref="Stream.WriteAsync(byte[], int, int, CancellationToken)"/>
+        /// <param name="stream">The instance of <see cref="Stream"/> to write to.</param>
+        /// <param name="byteString">The byte string to write to <paramref name="stream"/>.</param>
+        public static Task WriteAsync(this Stream stream, ByteString byteString, int offset, int count, CancellationToken cancellationToken)
+        {
+            return stream.WriteAsync(byteString.Data, offset, count, cancellationToken);
+        }
+
+        /// <inheritdoc cref="Encoding.GetString(byte[])"/>
         /// <param name="encoding">The instance of <see cref="Encoding"/> to decode with.</param>
         /// <param name="byteString">The byte string to decode.</param>
-        /// <returns>The decoded string.</returns>
         public static string GetString(this Encoding encoding, ByteString byteString)
         {
             return encoding.GetString(byteString.Data);
         }
 
-        /// <summary>
-        /// Decodes the bytes in the specified byte string into a string.
-        /// </summary>
+        /// <inheritdoc cref="Encoding.GetString(byte[], int, int)"/>
         /// <param name="encoding">The instance of <see cref="Encoding"/> to decode with.</param>
         /// <param name="byteString">The byte string to decode.</param>
-        /// <param name="index">The index of the first byte within <paramref name="byteString"/> to start decoding.</param>
-        /// <param name="count">The number of bytes to decode.</param>
-        /// <returns>The decoded string.</returns>
         public static string GetString(this Encoding encoding, ByteString byteString, int index, int count)
         {
             return encoding.GetString(byteString.Data, index, count);
+        }
+
+        /// <inheritdoc cref="Decoder.GetCharCount(byte[], int, int, bool)"/>
+        /// <param name="decoder">The instance of <see cref="Decoder"/> to decode with.</param>
+        /// <param name="byteString">The byte string to decode.</param>
+        public static int GetCharCount(this Decoder decoder, ByteString byteString, int index, int count, bool flush)
+        {
+            return decoder.GetCharCount(byteString.Data, index, count, flush);
+        }
+
+        /// <inheritdoc cref="Decoder.GetChars(byte[], int, int, char[], int, bool)"/>
+        /// <param name="decoder">The instance of <see cref="Decoder"/> to decode with.</param>
+        /// <param name="byteString">The byte string to decode.</param>
+        public static int GetChars(this Decoder decoder, ByteString byteString, int byteIndex, int byteCount, char[] chars, int charIndex, bool flush)
+        {
+            return decoder.GetChars(byteString.Data, byteIndex, byteCount, chars, charIndex, flush);
         }
     }
 }
